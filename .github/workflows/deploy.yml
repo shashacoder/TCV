@@ -52,17 +52,32 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.LIGHTSAIL_KNOWN_HOSTS }}
         run: |
+          set -euo pipefail
+
           mkdir -p ~/.ssh
 
-          printf '%s\n' "$SSH_PRIVATE_KEY" \
-            > ~/.ssh/tcv_deploy
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::error::LIGHTSAIL_SSH_KEY is missing"
+            exit 1
+          fi
+
+          # Remove Windows CRLF characters
+          printf '%s' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/tcv_deploy
 
           chmod 600 ~/.ssh/tcv_deploy
 
-          printf '%s\n' "$SSH_KNOWN_HOSTS" \
-            > ~/.ssh/known_hosts
+          # Validate that OpenSSH can read the private key
+          if ! ssh-keygen -y -f ~/.ssh/tcv_deploy >/dev/null; then
+            echo "::error::SSH private key is invalid or incorrectly formatted"
+            exit 1
+          fi
+
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
 
           chmod 600 ~/.ssh/known_hosts
+
+          echo "SSH key and known_hosts configuration validated."
+
 
       - name: Upload application to Lightsail
         shell: bash
