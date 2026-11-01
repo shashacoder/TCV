@@ -16,14 +16,41 @@ dotenv.config();
 
 async function startServer() {
   const app = express();
+  const isProduction = process.env.NODE_ENV === "production";
+
+if (isProduction) {
+    const requiredSmtpVariables = [
+        "SMTP_HOST",
+        "SMTP_USER",
+        "SMTP_PASS"
+    ];
+
+    const missingVariables = requiredSmtpVariables.filter(
+        key => !process.env[key]?.trim()
+    );
+
+    if (missingVariables.length > 0) {
+        console.error(
+            "[CONFIG ALERT] Production SMTP configuration is incomplete.",
+            { missingVariables }
+        );
+    }
+}
   if (process.env.NODE_ENV === "production") {
     app.use(helmet());
 }
-  const PORT = 8000;
+  const PORT = Number(process.env.PORT) || 8000;
 
   // Body parser
  
-  app.use(express.json());
+  app.use(express.json({
+    limit: "10kb"
+}));
+app.get("/health", (_req, res) => {
+    res.status(200).json({
+        status: "ok"
+    });
+});
 const contactLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 5,
@@ -95,7 +122,7 @@ const safeMessage = escapeHtml(cleanMessage);
   const random = crypto.randomBytes(3).toString("hex").toUpperCase();
 
       const docketId = `TCV-${date}-${random}`;
-      const partnerEmail = "brahmp@tcvadvisors.org";
+      const partnerEmail = "tathagatcorps@gmail.com";
 
       // 1. Prepare Email Content
       const emailContentHtml = `
@@ -216,6 +243,29 @@ const safeMessage = escapeHtml(cleanMessage);
       const portNum = parseInt(smtpPort) || 465;
       const isSecure = portNum === 465;
 
+      const missingSmtpFields = [];
+
+if (!smtpHost) missingSmtpFields.push("SMTP_HOST");
+if (!smtpUser) missingSmtpFields.push("SMTP_USER");
+if (!smtpPass) missingSmtpFields.push("SMTP_PASS");
+
+if (
+    process.env.NODE_ENV === "production" &&
+    missingSmtpFields.length > 0
+) {
+    console.error(
+        "[CONFIG ALERT] Contact request rejected because SMTP is unavailable.",
+        {
+            docketId,
+            missingFields: missingSmtpFields
+        }
+    );
+
+    return res.status(503).json({
+        error: "Our contact service is temporarily unavailable. Please contact us directly using the email address displayed on our website."
+    });
+}
+
       // 1. Determine if the user is intending to use a real SMTP server.
       // If they defined any of the core SMTP credentials, we consider it an SMTP attempt.
       const hasSmtpConfig = !!(smtpHost || smtpUser || smtpPass || smtpPort);
@@ -274,7 +324,7 @@ const safeMessage = escapeHtml(cleanMessage);
                 pass: smtpPass,
               },
               tls: {
-                rejectUnauthorized: false
+                rejectUnauthorized: true
               },
               connectionTimeout: 8000,
               greetingTimeout: 8000,
@@ -405,10 +455,13 @@ const safeMessage = escapeHtml(cleanMessage);
         simulated: true,
         warning: "No SMTP configuration was found. The scoping brief was simulated successfully in the secure sandbox."
       });
-    } catch (error: any) {
-      console.error("Error dispatching scoping brief emails:", error);
-      res.status(500).json({ error: "Internal server error: " + error.message });
-    }
+    } catch (error: unknown) {
+    console.error("Error dispatching scoping brief emails:", error);
+
+    res.status(500).json({
+        error: "Unable to process your request. Please try again later."
+    });
+}
   });
 
   // Vite middleware for development
@@ -425,10 +478,16 @@ const safeMessage = escapeHtml(cleanMessage);
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+app.set("trust proxy", "loopback");
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  const HOST =
+    process.env.NODE_ENV === "production"
+        ? "127.0.0.1"
+        : "0.0.0.0";
+
+app.listen(PORT, HOST, () => {
+    console.log(`Server running on ${HOST}:${PORT}`);
+});
 }
 
 startServer();
