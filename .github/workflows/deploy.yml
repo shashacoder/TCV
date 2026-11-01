@@ -196,8 +196,26 @@ jobs:
 
           test "$STATUS" = "active"
 
-          curl --fail --silent --show-error \
-            http://127.0.0.1:8000/health
+          HEALTHY=0
+
+          for attempt in $(seq 1 15); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              HEALTHY=1
+              echo
+              echo "Application health check passed."
+              break
+            fi
+
+            echo "Health check attempt ${attempt}/15 failed. Retrying in 2 seconds..."
+            sleep 2
+          done
+
+          if [ "$HEALTHY" -ne 1 ]; then
+            echo "Application health check failed."
+            sudo /usr/bin/systemctl status tcv --no-pager -l || true
+            sudo /usr/bin/journalctl -u tcv -n 50 --no-pager || true
+            exit 1
+          fi
 
           rm -f "/tmp/tcv-${GITHUB_SHA}.tar.gz"
 
