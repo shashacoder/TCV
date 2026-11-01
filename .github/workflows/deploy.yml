@@ -46,37 +46,75 @@ jobs:
           tar -czf tcv-release.tar.gz \
             dist package.json package-lock.json
 
+      
       - name: Configure SSH
         shell: bash
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          SSH_PRIVATE_KEY_B64: ${{ secrets.LIGHTSAIL_SSH_KEY_B64 }}
           SSH_KNOWN_HOSTS: ${{ secrets.LIGHTSAIL_KNOWN_HOSTS }}
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
         run: |
           set -euo pipefail
 
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
 
-          if [ -z "$SSH_PRIVATE_KEY" ]; then
-            echo "::error::LIGHTSAIL_SSH_KEY is missing"
+          if [ -z "$SSH_PRIVATE_KEY_B64" ]; then
+            echo "::error::LIGHTSAIL_SSH_KEY_B64 is missing"
             exit 1
           fi
 
-          # Remove Windows CRLF characters
-          printf '%s' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/tcv_deploy
+          # Decode the exact original private-key bytes
+          printf '%s' "$SSH_PRIVATE_KEY_B64" |
+            base64 --decode > ~/.ssh/tcv_deploy
 
           chmod 600 ~/.ssh/tcv_deploy
 
-          # Validate that OpenSSH can read the private key
-          if ! ssh-keygen -y -f ~/.ssh/tcv_deploy >/dev/null; then
-            echo "::error::SSH private key is invalid or incorrectly formatted"
+          # Validate that OpenSSH can read the key
+          if ! ssh-keygen -y -f ~/.ssh/tcv_deploy \
+              > ~/.ssh/tcv_deploy.pub; then
+            echo "::error::Decoded private key is invalid"
             exit 1
           fi
 
-          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
+          echo "Private-key fingerprint:"
+          ssh-keygen -lf ~/.ssh/tcv_deploy.pub
+
+          # Configure verified SSH host key
+          if [ -z "$SSH_KNOWN_HOSTS" ]; then
+            echo "::error::LIGHTSAIL_KNOWN_HOSTS is missing"
+            exit 1
+          fi
+
+          printf '%s\n' "$SSH_KNOWN_HOSTS" |
+            tr -d '\r' > ~/.ssh/known_hosts
 
           chmod 600 ~/.ssh/known_hosts
 
-          echo "SSH key and known_hosts configuration validated."
+          if ! ssh-keygen -F "$LIGHTSAIL_HOST" \
+              -f ~/.ssh/known_hosts >/dev/null; then
+            echo "::error::Lightsail host key is not configured"
+            exit 1
+          fi
+
+          echo "SSH configuration successfully validated."
+
+      - name: Test Lightsail SSH authentication
+        shell: bash
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i ~/.ssh/tcv_deploy \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            "${LIGHTSAIL_USER}@${LIGHTSAIL_HOST}" \
+            "whoami"
+
 
           
       - name: Verify deployment SSH authentication
