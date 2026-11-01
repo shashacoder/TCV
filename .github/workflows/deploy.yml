@@ -1,0 +1,123 @@
+
+name: Build and Deploy TCV
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tcv-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and Deploy to Lightsail
+    runs-on: ubuntu-latest
+
+    environment: production
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript validation
+        run: npm run lint
+
+      - name: Build application
+        run: npm run build
+
+      - name: Package production files
+        run: |
+          tar -czf tcv-release.tar.gz \
+            dist package.json package-lock.json
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.LIGHTSAIL_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" \
+            > ~/.ssh/tcv_deploy
+
+          chmod 600 ~/.ssh/tcv_deploy
+
+          printf '%s\n' "$SSH_KNOWN_HOSTS" \
+            > ~/.ssh/known_hosts
+
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload application to Lightsail
+        shell: bash
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+        run: |
+          scp \
+            -i ~/.ssh/tcv_deploy \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            tcv-release.tar.gz \
+            "${LIGHTSAIL_USER}@${LIGHTSAIL_HOST}:/tmp/tcv-${GITHUB_SHA}.tar.gz"
+
+      - name: Deploy and restart application
+        shell: bash
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/tcv_deploy \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${LIGHTSAIL_USER}@${LIGHTSAIL_HOST}" \
+            "GITHUB_SHA=${GITHUB_SHA} bash -s" <<'REMOTE'
+
+          set -Eeuo pipefail
+
+          RELEASE="/opt/tcv/releases/${GITHUB_SHA}"
+
+          mkdir -p "$RELEASE"
+
+          tar -xzf "/tmp/tcv-${GITHUB_SHA}.tar.gz" \
+            -C "$RELEASE"
+
+          cd "$RELEASE"
+
+          npm ci --omit=dev --no-audit --no-fund
+
+          ln -sfn "$RELEASE" /opt/tcv/current.next
+
+          mv -Tf /opt/tcv/current.next /opt/tcv/current
+
+          sudo /usr/bin/systemctl restart tcv
+
+          STATUS=$(sudo /usr/bin/systemctl is-active tcv)
+
+          test "$STATUS" = "active"
+
+          curl --fail --silent --show-error \
+            http://127.0.0.1:8000/health
+
+          rm -f "/tmp/tcv-${GITHUB_SHA}.tar.gz"
+
+          echo "TCV deployment successful."
+
+          REMOTE
