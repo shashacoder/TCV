@@ -78,6 +78,36 @@ jobs:
 
           echo "SSH key and known_hosts configuration validated."
 
+          
+      - name: Verify deployment SSH authentication
+        shell: bash
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+        run: |
+          set -euo pipefail
+
+          echo "Checking private key..."
+
+          ssh-keygen -y -f ~/.ssh/tcv_deploy \
+            > ~/.ssh/tcv_deploy.pub
+
+          echo "GitHub Actions private key fingerprint:"
+          ssh-keygen -lf ~/.ssh/tcv_deploy.pub
+
+          echo "Testing Lightsail SSH authentication..."
+
+          ssh \
+            -i ~/.ssh/tcv_deploy \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            "${LIGHTSAIL_USER}@${LIGHTSAIL_HOST}" \
+            "whoami"
+
+          echo "SSH authentication successful."
+
+
 
       - name: Upload application to Lightsail
         shell: bash
